@@ -1,0 +1,22 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended"],
+    "gomod": {
+        "enabled": true
+    },
+    "packageRules": [
+        {
+            "matchCategories": ["golang"],
+            "enabled": true
+        },
+        {
+            "matchManagers": ["gomod"],
+            "groupName": "Go dependencies"
+        },
+        {
+            "matchManagers": ["gomod"],
+            "matchDepTypes": ["indirect"],
+            "groupName": "Go indirect dependencies"
+        }
+    ]
+}

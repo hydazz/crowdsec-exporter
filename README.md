@@ -1,173 +1,88 @@
 # CrowdSec Exporter
 
-A Prometheus exporter for CrowdSec decisions with geographical and ASN information.
+A Prometheus exporter that pulls detailed decision data from CrowdSec’s Local API.
 
 ## Overview
 
-The built-in Prometheus metrics in CrowdSec only export stats and can't expose detailed information about decisions. This exporter solves that problem by querying the CrowdSec Local API and exposing decisions as Prometheus metrics with rich labels including:
-
-- Geographical information (country, latitude, longitude)
-- ASN information (AS name, AS number)
-- IP range information
-- Decision details (scenario, type, duration, scope)
+CrowdSec’s built-in Prometheus metrics provide basic counts but not much detail about what is being blocked.
+This exporter queries the Local API and exposes rich Prometheus metrics including geographic data, ASN info, and scenario details.
 
 ## Features
 
-- 🌍 **Rich Geographical Data**: Country, latitude, and longitude for each decision
-- 🔢 **ASN Information**: AS name and number for network attribution
-- 📊 **Prometheus Native**: Standard Prometheus metrics format
-- 🔄 **Real-time Updates**: Queries CrowdSec Local API for live data
-- 🐳 **Docker Ready**: Minimal container image
-- ⚙️ **Simple Configuration**: YAML-based configuration
+-   Geographic data (country, latitude, longitude)
+-   ASN information (name and number)
+-   Full decision details (scenario, type, duration, etc.)
+-   Real-time data from CrowdSec’s Local API
+-   Works with existing Prometheus and Grafana setups
+-   Lightweight Docker image
+
+## Quick Start
+
+### Method 1: Auto-Registration
+
+If your CrowdSec instance supports auto-registration with a token:
+
+```bash
+./crowdsec-exporter \
+  --crowdsec-url http://localhost:8080 \
+  --crowdsec-registration-token ${REGISTRATION_TOKEN} \
+  --log-level debug
+```
+
+### Method 2: Manual Machine Account
+
+```bash
+./crowdsec-exporter \
+  --crowdsec-url http://localhost:8080 \
+  --crowdsec-login your-machine-login \
+  --crowdsec-password your-machine-password \
+  --log-level debug
+```
+
+Metrics are exposed at `http://localhost:9090/metrics`.
+
+## Configuration Options
+
+| Flag                            | Environment Variable                            | Default                 | Description                            |
+| ------------------------------- | ----------------------------------------------- | ----------------------- | -------------------------------------- |
+| `--crowdsec-url`                | `CROWDSEC_EXPORTER_CROWDSEC_URL`                | `http://localhost:8080` | CrowdSec Local API URL                 |
+| `--crowdsec-login`              | `CROWDSEC_EXPORTER_CROWDSEC_LOGIN`              | -                       | Machine login (manual auth)            |
+| `--crowdsec-password`           | `CROWDSEC_EXPORTER_CROWDSEC_PASSWORD`           | -                       | Machine password (manual auth)         |
+| `--crowdsec-registration-token` | `CROWDSEC_EXPORTER_CROWDSEC_REGISTRATION_TOKEN` | -                       | Registration token (auto-registration) |
+| `--crowdsec-machine-name`       | `CROWDSEC_EXPORTER_CROWDSEC_MACHINE_NAME`       | hostname                | Machine name used during registration  |
+| `--listen-address`              | `CROWDSEC_EXPORTER_SERVER_LISTEN_ADDRESS`       | `:9090`                 | Listen address                         |
+| `--metrics-path`                | `CROWDSEC_EXPORTER_SERVER_METRICS_PATH`         | `/metrics`              | Metrics endpoint                       |
+| `--instance-name`               | `CROWDSEC_EXPORTER_EXPORTER_INSTANCE_NAME`      | `crowdsec`              | Instance label                         |
+| `--log-level`                   | `CROWDSEC_EXPORTER_LOG_LEVEL`                   | `info`                  | Log level (debug, info, warn, error)   |
 
 ## Installation
 
-### Binary
-
-Build from source:
+### Build from Source
 
 ```bash
-go build -o crowdsec-exporter main.go
+git clone https://github.com/hydazz/crowdsec-exporter
+cd crowdsec-exporter
+make build
 ```
 
-### Docker
+### Docker/Kubernetes
 
-Build the Docker image:
+## Metrics
 
-```bash
-docker build -t crowdsec-exporter .
-```
+The main metric is `cs_lapi_decision` with labels:
 
-## Configuration
+-   `instance`
+-   `country`
+-   `asname`
+-   `asnumber`
+-   `latitude`, `longitude`
+-   `iprange`
+-   `scenario`
+-   `type`
+-   `duration`
+-   `scope`
+-   `ip`
 
-Create a `config.yml` file with your CrowdSec Local API configuration:
+## Attribution
 
-```yaml
-auth:
-  login: "your-machine-login"
-  password: "your-machine-password"
-  api: "your-api-key"
-
-server:
-  protocol: "http"
-  host: "localhost"
-  port: "8080"
-  version: "v1"
-```
-
-## Getting CrowdSec Credentials
-
-### For Local API Authentication
-
-```bash
-# Create a machine account
-cscli machines add crowdsec-exporter
-
-# Note the login and password for config.yml
-```
-
-### For API Key
-
-```bash
-# Generate an API key (for decisions endpoint)
-cscli bouncers add crowdsec-exporter
-
-# Note the API key for config.yml
-```
-## Usage
-
-Start the exporter with required credentials:
-
-```bash
-# Using API key (recommended)
-./crowdsec-exporter --crowdsec-api-key YOUR_API_KEY
-
-# Or using login/password
-./crowdsec-exporter --crowdsec-login machine-name --crowdsec-password machine-password
-
-# With custom settings
-./crowdsec-exporter \
-  --crowdsec-url http://crowdsec:8080 \
-  --crowdsec-api-key YOUR_API_KEY \
-  --listen-address :9090 \
-  --instance-name my-crowdsec \
-  --scrape-interval 60s \
-  --log-level-debug
-```
-
-The exporter will start and provide:
-- Prometheus metrics at `/metrics` (default port 9999)
-- A simple status page at `/`
-
-### Configuration
-
-All configuration is done via command-line flags or environment variables:
-
-| Flag | Environment Variable | Default | Description |
-|------|---------------------|---------|-------------|
-| `--crowdsec-url` | `CROWDSEC_EXPORTER_CROWDSEC_URL` | `http://localhost:8080` | CrowdSec Local API URL |
-| `--crowdsec-api-key` | `CROWDSEC_EXPORTER_CROWDSEC_API_KEY` | - | CrowdSec API key (recommended) |
-| `--crowdsec-login` | `CROWDSEC_EXPORTER_CROWDSEC_LOGIN` | - | CrowdSec machine login |
-| `--crowdsec-password` | `CROWDSEC_EXPORTER_CROWDSEC_PASSWORD` | - | CrowdSec machine password |
-| `--listen-address` | `CROWDSEC_EXPORTER_LISTEN_ADDRESS` | `:9999` | Address to listen on |
-| `--metrics-path` | `CROWDSEC_EXPORTER_METRICS_PATH` | `/metrics` | Path for metrics endpoint |
-| `--instance-name` | `CROWDSEC_EXPORTER_INSTANCE_NAME` | `crowdsec` | Instance name in metrics |
-| `--scrape-interval` | `CROWDSEC_EXPORTER_SCRAPE_INTERVAL` | `30s` | How often to update metrics |
-| `--log-level-debug` | `CROWDSEC_EXPORTER_LOG_LEVEL_DEBUG` | `false` | Enable debug logging |
-
-## Grafana Dashboard
-
-The metrics are designed to work with CrowdSec Grafana dashboards. The `cs_lapi_decision` metric includes all necessary labels for geographical and network analysis:
-
-- **Geographical visualization**: Use `latitude`, `longitude`, and `country` labels
-- **Network analysis**: Use `asname`, `asnumber`, and `iprange` labels  
-- **Security analysis**: Use `scenario`, `type`, `scope`, and `ip` labels
-- **Time-based analysis**: Use `duration` label and metric timestamps
-
-## Building
-
-### Prerequisites
-
-- Go 1.24 or later
-
-### Build Commands
-
-```bash
-# Build the binary
-go build -o crowdsec-exporter main.go
-
-# Build Docker image
-docker build -t crowdsec-exporter .
-
-# Run locally (requires config.yml)
-./crowdsec-exporter
-```
-
-## Project Structure
-
-```
-crowdsec-exporter/
-├── main.go                      # Application entry point  
-├── core/
-│   ├── requester.go            # CrowdSec API client
-│   └── returner.go             # Data processing logic
-├── models/
-│   ├── alert.go                # Alert data structures
-│   └── decision.go             # Decision data structures
-├── utils/
-│   ├── config.go               # Configuration management
-│   └── authenticator.go        # Authentication logic
-├── config.yml                  # Configuration file
-├── Dockerfile                  # Docker build
-├── Makefile                    # Build automation
-├── go.mod                      # Go module definition
-└── README.md                   # This file
-```
-
-## License
-
-See [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+This project continues on [lucadomene/crowdsec-LAPIexporter](https://github.com/lucadomene/crowdsec-LAPIexporter).

@@ -16,9 +16,11 @@ type Config struct {
 
 // CrowdSecConfig contains CrowdSec API configuration
 type CrowdSecConfig struct {
-	URL      string `mapstructure:"url"`
-	Login    string `mapstructure:"login"`
-	Password string `mapstructure:"password"`
+	URL               string `mapstructure:"url"`
+	Login             string `mapstructure:"login"`
+	Password          string `mapstructure:"password"`
+	RegistrationToken string `mapstructure:"registration_token"`
+	MachineName       string `mapstructure:"machine_name"`
 }
 
 // ServerConfig contains HTTP server configuration
@@ -40,8 +42,16 @@ func (c *Config) Validate() error {
 		errors = append(errors, "crowdsec.url is required")
 	}
 
-	if c.CrowdSec.Login == "" || c.CrowdSec.Password == "" {
-		errors = append(errors, "crowdsec.login and crowdsec.password are required")
+	// Check if we have either login/password OR registration token
+	hasLoginAuth := c.CrowdSec.Login != "" && c.CrowdSec.Password != ""
+	hasTokenAuth := c.CrowdSec.RegistrationToken != ""
+
+	if !hasLoginAuth && !hasTokenAuth {
+		errors = append(errors, "either (crowdsec.login and crowdsec.password) OR crowdsec.registration_token is required")
+	}
+
+	if hasLoginAuth && hasTokenAuth {
+		errors = append(errors, "cannot use both login/password and registration token authentication")
 	}
 
 	if c.Server.ListenAddress == "" {

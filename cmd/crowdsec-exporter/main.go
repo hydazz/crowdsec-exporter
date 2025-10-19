@@ -32,8 +32,10 @@ and ASN information as metrics, compatible with Grafana dashboards.`,
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().String("crowdsec-url", "http://localhost:8080", "CrowdSec Local API URL")
-	rootCmd.PersistentFlags().String("crowdsec-login", "", "CrowdSec machine login (required)")
-	rootCmd.PersistentFlags().String("crowdsec-password", "", "CrowdSec machine password (required)")
+	rootCmd.PersistentFlags().String("crowdsec-login", "", "CrowdSec machine login")
+	rootCmd.PersistentFlags().String("crowdsec-password", "", "CrowdSec machine password")
+	rootCmd.PersistentFlags().String("crowdsec-registration-token", "", "CrowdSec auto-registration token")
+	rootCmd.PersistentFlags().String("crowdsec-machine-name", "", "Machine name for auto-registration (defaults to hostname)")
 	rootCmd.PersistentFlags().String("listen-address", ":9090", "Address to listen on for web interface and metrics")
 	rootCmd.PersistentFlags().String("metrics-path", "/metrics", "Path under which to expose metrics")
 	rootCmd.PersistentFlags().String("instance-name", "crowdsec", "Instance name to use in metrics labels")
@@ -43,6 +45,8 @@ func init() {
 	viper.BindPFlag("crowdsec.url", rootCmd.PersistentFlags().Lookup("crowdsec-url"))
 	viper.BindPFlag("crowdsec.login", rootCmd.PersistentFlags().Lookup("crowdsec-login"))
 	viper.BindPFlag("crowdsec.password", rootCmd.PersistentFlags().Lookup("crowdsec-password"))
+	viper.BindPFlag("crowdsec.registration_token", rootCmd.PersistentFlags().Lookup("crowdsec-registration-token"))
+	viper.BindPFlag("crowdsec.machine_name", rootCmd.PersistentFlags().Lookup("crowdsec-machine-name"))
 	viper.BindPFlag("server.listen_address", rootCmd.PersistentFlags().Lookup("listen-address"))
 	viper.BindPFlag("server.metrics_path", rootCmd.PersistentFlags().Lookup("metrics-path"))
 	viper.BindPFlag("exporter.instance_name", rootCmd.PersistentFlags().Lookup("instance-name"))

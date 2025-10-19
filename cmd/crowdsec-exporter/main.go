@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,48 +19,97 @@ import (
 )
 
 var (
-	cfg *config.Config
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "crowdsec-exporter",
-	Short: "Prometheus exporter for CrowdSec decisions",
-	Long: `A Prometheus exporter that exposes CrowdSec decisions with rich geographical 
+func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		slog.Error("Command execution failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "crowdsec-exporter",
+		Short: "Prometheus exporter for CrowdSec decisions",
+		Long: `A Prometheus exporter that exposes CrowdSec decisions with rich geographical 
 and ASN information as metrics, compatible with Grafana dashboards.`,
-	RunE: runExporter,
-}
 
-func init() {
-	// Global flags
-	rootCmd.PersistentFlags().String("crowdsec-url", "http://localhost:8080", "CrowdSec Local API URL")
-	rootCmd.PersistentFlags().String("crowdsec-login", "", "CrowdSec machine login")
-	rootCmd.PersistentFlags().String("crowdsec-password", "", "CrowdSec machine password")
-	rootCmd.PersistentFlags().String("crowdsec-registration-token", "", "CrowdSec auto-registration token")
-	rootCmd.PersistentFlags().String("crowdsec-machine-name", "", "Machine name for auto-registration (defaults to hostname)")
-	rootCmd.PersistentFlags().String("listen-address", ":9090", "Address to listen on for web interface and metrics")
-	rootCmd.PersistentFlags().String("metrics-path", "/metrics", "Path under which to expose metrics")
-	rootCmd.PersistentFlags().String("instance-name", "crowdsec", "Instance name to use in metrics labels")
-	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
+		SilenceUsage:  true, // Don't show usage on errors
+		SilenceErrors: true, // We handle errors manually
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runExporter()
+		},
+	}
 
-	// Bind flags to viper
-	viper.BindPFlag("crowdsec.url", rootCmd.PersistentFlags().Lookup("crowdsec-url"))
-	viper.BindPFlag("crowdsec.login", rootCmd.PersistentFlags().Lookup("crowdsec-login"))
-	viper.BindPFlag("crowdsec.password", rootCmd.PersistentFlags().Lookup("crowdsec-password"))
-	viper.BindPFlag("crowdsec.registration_token", rootCmd.PersistentFlags().Lookup("crowdsec-registration-token"))
-	viper.BindPFlag("crowdsec.machine_name", rootCmd.PersistentFlags().Lookup("crowdsec-machine-name"))
-	viper.BindPFlag("server.listen_address", rootCmd.PersistentFlags().Lookup("listen-address"))
-	viper.BindPFlag("server.metrics_path", rootCmd.PersistentFlags().Lookup("metrics-path"))
-	viper.BindPFlag("exporter.instance_name", rootCmd.PersistentFlags().Lookup("instance-name"))
-	viper.BindPFlag("log_level", rootCmd.PersistentFlags().Lookup("log-level"))
-}
-
-func runExporter(cmd *cobra.Command, args []string) error {
-	// Set up viper to read from environment variables and flags
+	// Setup Viper for automatic env binding
 	viper.SetEnvPrefix("CROWDSEC_EXPORTER")
 	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 
+	flags := cmd.Flags()
+	flags.String("crowdsec-url", "http://localhost:8080", "CrowdSec Local API URL")
+	flags.String("crowdsec-login", "", "CrowdSec machine login")
+	flags.String("crowdsec-password", "", "CrowdSec machine password")
+	flags.String("crowdsec-registration-token", "", "CrowdSec auto-registration token")
+	flags.String("crowdsec-machine-name", "", "Machine name for auto-registration (defaults to hostname)")
+	flags.String("listen-address", ":9090", "Address to listen on for web interface and metrics")
+	flags.String("metrics-path", "/metrics", "Path under which to expose metrics")
+	flags.String("instance-name", "crowdsec", "Instance name to use in metrics labels")
+	flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+
+	// Bind flags to viper
+	if err := viper.BindPFlag("crowdsec.url", flags.Lookup("crowdsec-url")); err != nil {
+		panic(fmt.Sprintf("failed to bind crowdsec-url flag: %v", err))
+	}
+	if err := viper.BindPFlag("crowdsec.login", flags.Lookup("crowdsec-login")); err != nil {
+		panic(fmt.Sprintf("failed to bind crowdsec-login flag: %v", err))
+	}
+	if err := viper.BindPFlag("crowdsec.password", flags.Lookup("crowdsec-password")); err != nil {
+		panic(fmt.Sprintf("failed to bind crowdsec-password flag: %v", err))
+	}
+	if err := viper.BindPFlag("crowdsec.registration_token", flags.Lookup("crowdsec-registration-token")); err != nil {
+		panic(fmt.Sprintf("failed to bind crowdsec-registration-token flag: %v", err))
+	}
+	if err := viper.BindPFlag("crowdsec.machine_name", flags.Lookup("crowdsec-machine-name")); err != nil {
+		panic(fmt.Sprintf("failed to bind crowdsec-machine-name flag: %v", err))
+	}
+	if err := viper.BindPFlag("server.listen_address", flags.Lookup("listen-address")); err != nil {
+		panic(fmt.Sprintf("failed to bind listen-address flag: %v", err))
+	}
+	if err := viper.BindPFlag("server.metrics_path", flags.Lookup("metrics-path")); err != nil {
+		panic(fmt.Sprintf("failed to bind metrics-path flag: %v", err))
+	}
+	if err := viper.BindPFlag("exporter.instance_name", flags.Lookup("instance-name")); err != nil {
+		panic(fmt.Sprintf("failed to bind instance-name flag: %v", err))
+	}
+	if err := viper.BindPFlag("log_level", flags.Lookup("log-level")); err != nil {
+		panic(fmt.Sprintf("failed to bind log-level flag: %v", err))
+	}
+
+	cmd.AddCommand(newVersionCmd())
+
+	return cmd
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Show version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("crowdsec-exporter %s\n", version)
+			fmt.Printf("commit: %s\n", commit)
+			fmt.Printf("built: %s\n", date)
+		},
+	}
+}
+
+func runExporter() error {
 	// Load config from flags and env vars
-	cfg = &config.Config{}
+	cfg := &config.Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
 		return fmt.Errorf("unable to decode config: %w", err)
 	}
@@ -126,11 +176,4 @@ func runExporter(cmd *cobra.Command, args []string) error {
 
 	slog.Info("Server exited")
 	return nil
-}
-
-func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
 }

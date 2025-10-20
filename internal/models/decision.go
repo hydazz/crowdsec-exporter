@@ -1,6 +1,7 @@
 package models
 
 type Decision struct {
+	ID        int    `json:"id"`
 	UUID      string `json:"uuid"`
 	Scenario  string `json:"scenario"`
 	IPAddress string `json:"ip"`

@@ -35,6 +35,7 @@ func New(cfg *config.Config) (*Exporter, error) {
 			"CrowdSec decisions with detailed metadata",
 			[]string{
 				"instance",
+				"id",
 				"country",
 				"asname",
 				"asnumber",
@@ -91,6 +92,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				prometheus.GaugeValue,
 				1,
 				e.config.Exporter.InstanceName,
+				fmt.Sprintf("%d", decision.ID),
 				decision.Country,
 				decision.AsName,
 				decision.AsNumber,

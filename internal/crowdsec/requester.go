@@ -82,14 +82,16 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 			for _, d := range ds {
 				if dm, ok := d.(map[string]interface{}); ok {
 					var dec models.Decision
+					dec.ID = getInt(dm, "id")
 					dec.UUID = getString(dm, "uuid")
 					dec.Scenario = getString(dm, "scenario")
 					dec.IPAddress = getString(dm, "value")
 					dec.Type = getString(dm, "type")
-					dec.Duration = calculateOriginalDuration(dec.CreatedAt, dec.Until)
 					dec.Scope = getString(dm, "scope")
-					dec.Until = getString(dm, "until")
-					dec.CreatedAt = getString(dm, "created_at")
+
+					// Calculate original duration because CrowdSec API provides duration as remainder?
+					remainingDuration := getString(dm, "duration")
+					dec.Duration = calculateOriginalDuration(a.CreatedAt, remainingDuration)
 
 					dec.Country = a.Country
 					dec.AsName = a.AsName
@@ -123,22 +125,36 @@ func getFloat(m map[string]interface{}, key string) float64 {
 	return 0
 }
 
-// calculateOriginalDuration calculates the original ban duration from created_at and until timestamps
-func calculateOriginalDuration(createdAt, until string) string {
-	if createdAt == "" || until == "" {
+func getInt(m map[string]interface{}, key string) int {
+	if v, ok := m[key].(float64); ok {
+		return int(v)
+	}
+	if v, ok := m[key].(int); ok {
+		return v
+	}
+	return 0
+}
+
+func calculateOriginalDuration(alertCreatedAt, remainingDuration string) string {
+	if alertCreatedAt == "" || remainingDuration == "" {
 		return ""
 	}
 
-	createdTime, err := time.Parse(time.RFC3339, createdAt)
+	remaining, err := time.ParseDuration(remainingDuration)
 	if err != nil {
 		return ""
 	}
 
-	untilTime, err := time.Parse(time.RFC3339, until)
+	alertTime, err := time.Parse(time.RFC3339, alertCreatedAt)
 	if err != nil {
 		return ""
 	}
 
-	duration := untilTime.Sub(createdTime)
-	return duration.String()
+	now := time.Now()
+	elapsed := now.Sub(alertTime)
+	originalDuration := remaining + elapsed
+
+	// Round to nearest minute to avoid duplicate metrics
+	// Could be flaky, but better than nothing
+	return originalDuration.Round(time.Minute).String()
 }

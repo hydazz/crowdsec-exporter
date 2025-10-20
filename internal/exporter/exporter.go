@@ -85,6 +85,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	for _, alert := range alerts {
 		for _, decision := range alert.Decisions {
 			decisionTime := parseDecisionTime(alert, decision)
+
 			metric := prometheus.MustNewConstMetric(
 				e.metrics.DecisionInfo,
 				prometheus.GaugeValue,
@@ -124,35 +125,15 @@ func initCrowdSecClient(cfg *config.Config) error {
 	return nil
 }
 
-// splitHostPort splits a host:port string
-func splitHostPort(hostport string) []string {
-	// Simple implementation - could use net.SplitHostPort for more robust parsing
-	parts := make([]string, 0, 2)
-	colonIndex := -1
-	for i, c := range hostport {
-		if c == ':' {
-			colonIndex = i
-			break
-		}
-	}
-
-	if colonIndex == -1 {
-		parts = append(parts, hostport)
-	} else {
-		parts = append(parts, hostport[:colonIndex])
-		parts = append(parts, hostport[colonIndex+1:])
-	}
-
-	return parts
-}
-
 // formatFloat converts float64 to string for labels
 func formatFloat(f float64) string {
 	return fmt.Sprintf("%.6f", f)
 }
 
 func parseDecisionTime(alert models.Alert, decision models.Decision) time.Time {
-	candidates := []string{decision.CreatedAt, alert.DateTime}
+	// Try decision created_at first, then alert created_at
+	candidates := []string{decision.CreatedAt, alert.CreatedAt}
+
 	for _, raw := range candidates {
 		if raw == "" {
 			continue

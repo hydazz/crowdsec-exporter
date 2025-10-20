@@ -60,6 +60,9 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 		var a models.Alert
 		a.Scenario = getString(v, "scenario")
 		a.DateTime = getString(v, "created_at")
+		a.CreatedAt = getString(v, "created_at")
+		a.StartAt = getString(v, "start_at")
+		a.StopAt = getString(v, "stop_at")
 
 		if src, ok := v["source"].(map[string]interface{}); ok {
 			a.IPAddress = getString(src, "ip")
@@ -162,6 +165,7 @@ func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []stri
 				d.Duration = getString(m, "duration")
 				d.Scope = getString(m, "scope")
 				d.Until = getString(m, "until")
+				d.CreatedAt = getString(m, "created_at")
 				newDecisions = append(newDecisions, d)
 			}
 		}

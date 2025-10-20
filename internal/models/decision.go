@@ -12,6 +12,7 @@ type Decision struct {
 	Until     string `json:"until"`
 	Duration  string `json:"duration"`
 	Scope     string `json:"scope"`
+	CreatedAt string `json:"created_at"`
 	// Geographic and ASN information
 	Country   string  `json:"country"`
 	AsName    string  `json:"asname"`
@@ -23,51 +24,55 @@ type Decision struct {
 
 type DecisionArray []Decision
 
-var DecisionsMutex struct {
-	Mu        sync.Mutex
-	Length    int
-	Decisions DecisionArray
+var decisionsStore struct {
+	mu        sync.Mutex
+	decisions DecisionArray
 }
 
 func GetDecisions() DecisionArray {
-	return DecisionsMutex.Decisions
+	// return a copy to avoid callers mutating shared slice
+	out := make(DecisionArray, len(decisionsStore.decisions))
+	copy(out, decisionsStore.decisions)
+	return out
 }
 
 func GetDecisionsLength() int {
-	return DecisionsMutex.Length
+	return len(decisionsStore.decisions)
 }
 
 func LockDecisions() {
-	DecisionsMutex.Mu.Lock()
+	decisionsStore.mu.Lock()
 }
 
 func UnlockDecisions() {
-	DecisionsMutex.Mu.Unlock()
+	decisionsStore.mu.Unlock()
 }
 
 func deleteDecision(index int) {
-	DecisionsMutex.Decisions[index] = DecisionsMutex.Decisions[DecisionsMutex.Length-1]
-	DecisionsMutex.Length--
-	DecisionsMutex.Decisions = DecisionsMutex.Decisions[:DecisionsMutex.Length-1]
+	last := len(decisionsStore.decisions) - 1
+	if last < 0 {
+		return
+	}
+	decisionsStore.decisions[index] = decisionsStore.decisions[last]
+	decisionsStore.decisions = decisionsStore.decisions[:last]
 }
 
 func appendDecision(dec Decision) {
-	DecisionsMutex.Decisions = append(DecisionsMutex.Decisions, dec)
+	decisionsStore.decisions = append(decisionsStore.decisions, dec)
 }
 
 func DeleteDecisions(decsUUID []string) {
-
 	for _, v := range decsUUID {
-		for j, w := range DecisionsMutex.Decisions {
+		for j, w := range decisionsStore.decisions {
 			if v == w.UUID {
 				deleteDecision(j)
+				break
 			}
 		}
 	}
 }
 
 func AppendDecisions(decs DecisionArray) {
-
 	for _, v := range decs {
 		appendDecision(v)
 	}

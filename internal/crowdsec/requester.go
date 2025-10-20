@@ -2,6 +2,7 @@ package crowdsec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,7 +10,9 @@ import (
 )
 
 func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
-	CheckAuth()
+	if err := CheckAuth(); err != nil {
+		return nil, fmt.Errorf("check auth: %w", err)
+	}
 
 	var (
 		res *http.Response
@@ -32,9 +35,8 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 			}
 			continue
 		}
-		defer res.Body.Close()
-
 		if res.StatusCode >= 300 {
+			res.Body.Close()
 			if attempts == 0 {
 				return nil, fmt.Errorf("%s", res.Status)
 			}
@@ -42,6 +44,11 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 		}
 		break
 	}
+
+	if res == nil {
+		return nil, errors.New("no response received from CrowdSec")
+	}
+	defer res.Body.Close()
 
 	var raw []map[string]interface{}
 	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
@@ -78,6 +85,7 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 					dec.Duration = getString(dm, "duration")
 					dec.Scope = getString(dm, "scope")
 					dec.Until = getString(dm, "until")
+					dec.CreatedAt = getString(dm, "created_at")
 
 					dec.Country = a.Country
 					dec.AsName = a.AsName
@@ -98,6 +106,10 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 }
 
 func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []string, error) {
+	if err := CheckAuth(); err != nil {
+		return nil, nil, fmt.Errorf("check auth: %w", err)
+	}
+
 	url := fmt.Sprintf("%s/v1/decisions/stream?startup=%v", AuthToken.Config.CrowdSec.URL, startup)
 
 	var (
@@ -118,9 +130,8 @@ func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []stri
 			}
 			continue
 		}
-		defer res.Body.Close()
-
 		if res.StatusCode >= 300 {
+			res.Body.Close()
 			if attempts == 0 {
 				return nil, nil, fmt.Errorf("%s", res.Status)
 			}
@@ -128,6 +139,11 @@ func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []stri
 		}
 		break
 	}
+
+	if res == nil {
+		return nil, nil, errors.New("no response received from CrowdSec")
+	}
+	defer res.Body.Close()
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {

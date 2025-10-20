@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +41,7 @@ func InitializeToken(cfg *config.Config) {
 	}
 }
 
-func CheckAuth() {
+func CheckAuth() error {
 	AuthToken.mu.Lock()
 	defer AuthToken.mu.Unlock()
 
@@ -50,21 +49,24 @@ func CheckAuth() {
 
 	if !AuthToken.isRegistered && AuthToken.Config.CrowdSec.RegistrationToken != "" {
 		if err := registerMachine(); err != nil {
-			slog.Error("registerMachine", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("register machine: %w", err)
 		}
 		AuthToken.Expire = time.Now()
 	}
 
 	if AuthToken.Expire.Before(time.Now()) {
 		slog.Debug("authenticate", "machineId", AuthToken.machineLogin)
-		authenticate()
+		if err := authenticate(); err != nil {
+			return fmt.Errorf("authenticate: %w", err)
+		}
 	}
+
+	return nil
 }
 
 func GetToken() string { return AuthToken.BearerToken }
 
-func authenticate() {
+func authenticate() error {
 	payload := struct {
 		Machine_id string `json:"machine_id"`
 		Password   string `json:"password"`
@@ -75,14 +77,12 @@ func authenticate() {
 
 	res, body, err := postJSON(AuthToken.Config.CrowdSec.URL+"/v1/watchers/login", payload)
 	if err != nil {
-		slog.Error("auth request", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("auth request: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		slog.Error("auth failed", "status", res.StatusCode, "machineId", payload.Machine_id, "body", string(body))
-		os.Exit(1)
+		return fmt.Errorf("auth failed: status=%d machineId=%s body=%s", res.StatusCode, payload.Machine_id, string(body))
 	}
 
 	var tr struct {
@@ -90,12 +90,12 @@ func authenticate() {
 		Expire string `json:"expire"`
 	}
 	if err := json.Unmarshal(body, &tr); err != nil {
-		slog.Error("auth decode", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("auth decode: %w", err)
 	}
 
 	AuthToken.BearerToken = tr.Token
 	AuthToken.Expire = parseExpire(tr.Expire)
+	return nil
 }
 
 func registerMachine() error {
@@ -174,7 +174,9 @@ func DeregisterMachine() error {
 		return nil
 	}
 	if AuthToken.Expire.Before(time.Now()) {
-		authenticate()
+		if err := authenticate(); err != nil {
+			return err
+		}
 	}
 
 	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/v1/watchers/%s", AuthToken.Config.CrowdSec.URL, AuthToken.machineLogin), nil)

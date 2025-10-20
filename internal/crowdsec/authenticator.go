@@ -2,13 +2,13 @@ package crowdsec
 
 import (
 	"bytes"
-	cryptorand "crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,11 +34,11 @@ func InitializeToken(cfg *config.Config) {
 	AuthToken.Config = cfg
 	AuthToken.isRegistered = false
 
-	// If using login/password auth, we're already "registered"
-	if cfg.CrowdSec.Login != "" && cfg.CrowdSec.Password != "" {
+	AuthToken.machineLogin = cfg.CrowdSec.Login
+	AuthToken.machinePasswd = cfg.CrowdSec.Password
+
+	if cfg.CrowdSec.RegistrationToken == "" {
 		AuthToken.isRegistered = true
-		AuthToken.machineLogin = cfg.CrowdSec.Login
-		AuthToken.machinePasswd = cfg.CrowdSec.Password
 	}
 }
 
@@ -46,142 +46,201 @@ func CheckAuth() {
 	AuthToken.mu.Lock()
 	defer AuthToken.mu.Unlock()
 
-	// If using auto-registration and not yet registered, register first
+	slog.Debug("CheckAuth", "isRegistered", AuthToken.isRegistered, "hasRegToken", AuthToken.Config.CrowdSec.RegistrationToken != "", "tokenExpired", AuthToken.Expire.Before(time.Now()))
+
 	if !AuthToken.isRegistered && AuthToken.Config.CrowdSec.RegistrationToken != "" {
 		if err := registerMachine(); err != nil {
-			slog.Error("Failed to register machine", "error", err)
+			slog.Error("registerMachine", "error", err)
 			os.Exit(1)
 		}
+		AuthToken.Expire = time.Now()
 	}
 
 	if AuthToken.Expire.Before(time.Now()) {
+		slog.Debug("authenticate", "machineId", AuthToken.machineLogin)
 		authenticate()
 	}
 }
 
-func GetToken() string {
-	return AuthToken.BearerToken
-}
+func GetToken() string { return AuthToken.BearerToken }
 
 func authenticate() {
-	var credentials struct {
+	payload := struct {
 		Machine_id string `json:"machine_id"`
 		Password   string `json:"password"`
+	}{
+		Machine_id: AuthToken.machineLogin,
+		Password:   AuthToken.machinePasswd,
 	}
 
-	credentials.Machine_id = AuthToken.machineLogin
-	credentials.Password = AuthToken.machinePasswd
-
-	credentials_json, err := json.Marshal(credentials)
+	res, body, err := postJSON(AuthToken.Config.CrowdSec.URL+"/v1/watchers/login", payload)
 	if err != nil {
-		slog.Error("Failed to marshal credentials", "error", err)
-		os.Exit(1)
-	}
-
-	req, err := http.NewRequest("POST", AuthToken.Config.CrowdSec.URL+"/v1/watchers/login", bytes.NewBuffer(credentials_json))
-	if err != nil {
-		slog.Error("Failed to create authentication request", "error", err)
-		os.Exit(1)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		slog.Error("Failed to authenticate with CrowdSec", "error", err)
+		slog.Error("auth request", "error", err)
 		os.Exit(1)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		slog.Error("Authentication failed", "status", res.StatusCode)
+		slog.Error("auth failed", "status", res.StatusCode, "machineId", payload.Machine_id, "body", string(body))
 		os.Exit(1)
 	}
 
-	var TokenResponse struct {
+	var tr struct {
 		Token  string `json:"token"`
 		Expire string `json:"expire"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&TokenResponse); err != nil {
-		slog.Error("Failed to decode authentication response", "error", err)
+	if err := json.Unmarshal(body, &tr); err != nil {
+		slog.Error("auth decode", "error", err)
 		os.Exit(1)
 	}
 
-	AuthToken.BearerToken = TokenResponse.Token
-
-	// Only parse expire time if it's not empty
-	if TokenResponse.Expire != "" {
-		AuthToken.Expire, err = time.Parse(time.RFC3339, TokenResponse.Expire)
-		if err != nil {
-			slog.Warn("Could not parse expire time, using fallback", "expire_time", TokenResponse.Expire, "error", err)
-			// Set expiry to 1 hour from now as fallback
-			AuthToken.Expire = time.Now().Add(1 * time.Hour)
-		}
-	} else {
-		// If no expire time provided, set to 1 hour from now
-		AuthToken.Expire = time.Now().Add(1 * time.Hour)
-	}
+	AuthToken.BearerToken = tr.Token
+	AuthToken.Expire = parseExpire(tr.Expire)
 }
 
 func registerMachine() error {
-	machineName := AuthToken.Config.CrowdSec.MachineName
-	if machineName == "" {
-		// Use hostname as default machine name
-		hostname, err := os.Hostname()
-		if err != nil {
-			machineName = "crowdsec-exporter"
-		} else {
-			machineName = fmt.Sprintf("crowdsec-exporter-%s", hostname)
-		}
+	machineId := AuthToken.Config.CrowdSec.Login
+	password := AuthToken.Config.CrowdSec.Password
+
+	slog.Debug("checking if machine already exists", "machineId", machineId)
+	if tryAuthenticate(machineId, password) {
+		slog.Info("machine already registered and accessible", "machineId", machineId)
+		AuthToken.isRegistered = true
+		return nil
 	}
 
-	registerData := struct {
-		MachineId         string `json:"machine_id"`
-		Password          string `json:"password"`
-		RegistrationToken string `json:"registration_token,omitempty"`
-	}{
-		MachineId:         machineName,
-		Password:          generatePassword(),
+	data := regPayload{
+		MachineId:         machineId,
+		Password:          password,
 		RegistrationToken: AuthToken.Config.CrowdSec.RegistrationToken,
 	}
 
-	registerJSON, err := json.Marshal(registerData)
+	slog.Debug("attempting registration", "machineId", data.MachineId)
+	res, body, err := postJSON(AuthToken.Config.CrowdSec.URL+"/v1/watchers", data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal registration data: %w", err)
+		return fmt.Errorf("register request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusCreated || res.StatusCode == http.StatusAccepted {
+		slog.Info("successfully registered machine", "machineId", machineId)
+		setRegistered(data)
+		return nil
 	}
 
-	req, err := http.NewRequest("POST", AuthToken.Config.CrowdSec.URL+"/v1/watchers", bytes.NewBuffer(registerJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create registration request: %w", err)
+	if res.StatusCode == http.StatusForbidden && strings.Contains(string(body), "user already exist") {
+		slog.Info("machine already exists, proceeding with provided credentials", "machineId", machineId)
+		setRegistered(data)
+		return nil
 	}
 
+	return fmt.Errorf("registration failed: status=%d body=%s", res.StatusCode, string(body))
+}
+
+func tryAuthenticate(machineId, password string) bool {
+	payload := struct {
+		Machine_id string `json:"machine_id"`
+		Password   string `json:"password"`
+	}{
+		Machine_id: machineId,
+		Password:   password,
+	}
+
+	res, _, err := postJSON(AuthToken.Config.CrowdSec.URL+"/v1/watchers/login", payload)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+
+	return res.StatusCode == http.StatusOK
+}
+
+type regPayload struct {
+	MachineId         string `json:"machine_id"`
+	Password          string `json:"password"`
+	RegistrationToken string `json:"registration_token,omitempty"`
+}
+
+func DeregisterMachine() error {
+	AuthToken.mu.Lock()
+	defer AuthToken.mu.Unlock()
+
+	if !AuthToken.Config.CrowdSec.DeregisterOnExit {
+		slog.Debug("deregistration disabled")
+		return nil
+	}
+
+	if !AuthToken.isRegistered || AuthToken.machineLogin == "" {
+		return nil
+	}
+	if AuthToken.Expire.Before(time.Now()) {
+		authenticate()
+	}
+
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/v1/watchers/%s", AuthToken.Config.CrowdSec.URL, AuthToken.machineLogin), nil)
+	if err != nil {
+		return fmt.Errorf("deregister request build: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+AuthToken.BearerToken)
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("deregister request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusOK || res.StatusCode == http.StatusNoContent {
+		slog.Info("deregistered", "machine_id", AuthToken.machineLogin)
+		clearRegistration()
+		return nil
+	}
+
+	body, _ := io.ReadAll(res.Body)
+	slog.Warn("deregister failed", "status", res.StatusCode, "machine_id", AuthToken.machineLogin, "body", string(body))
+	return nil
+}
+
+func postJSON(url string, v any) (*http.Response, []byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return nil, nil, fmt.Errorf("request build: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to register with CrowdSec: %w", err)
+		return nil, nil, err
 	}
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("registration failed with status: %d", res.StatusCode)
-	}
-
-	// Registration successful, store credentials
-	AuthToken.machineLogin = registerData.MachineId
-	AuthToken.machinePasswd = registerData.Password
-	AuthToken.isRegistered = true
-
-	slog.Info("Successfully registered machine", "machine_id", registerData.MachineId)
-	return nil
+	body, _ := io.ReadAll(res.Body) // callers still own res.Body Close
+	return res, body, nil
 }
 
-func generatePassword() string {
-	// Generate a cryptographically secure random password
-	randomBytes := make([]byte, 16)
-	if _, err := cryptorand.Read(randomBytes); err != nil {
-		// Fallback to timestamp-based password if crypto/rand fails
-		return fmt.Sprintf("exporter-%d", time.Now().UnixNano())
+func parseExpire(s string) time.Time {
+	if s == "" {
+		return time.Now().Add(time.Hour)
 	}
-	return hex.EncodeToString(randomBytes)
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		slog.Warn("expire parse", "value", s, "error", err)
+		return time.Now().Add(time.Hour)
+	}
+	return t
+}
+
+func setRegistered(p regPayload) {
+	AuthToken.machineLogin = p.MachineId
+	AuthToken.machinePasswd = p.Password
+	AuthToken.isRegistered = true
+}
+
+func clearRegistration() {
+	AuthToken.isRegistered = false
+	AuthToken.machineLogin = ""
+	AuthToken.machinePasswd = ""
+	AuthToken.BearerToken = ""
+	AuthToken.Expire = time.Now()
 }

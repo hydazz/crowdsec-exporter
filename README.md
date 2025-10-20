@@ -21,15 +21,18 @@ This exporter queries the Local API and exposes rich Prometheus metrics includin
 ### Method 1: Auto-Registration
 
 If your CrowdSec instance supports auto-registration with a token:
+**Note:** When using auto-registration with a token, the provided login/password will be used for the machine registration.
 
 ```bash
 ./crowdsec-exporter \
   --crowdsec-url http://localhost:8080 \
+  --crowdsec-login your-machine-login \ # crowdsec-exporter
+  --crowdsec-password your-machine-password \ # make 16+ characters
   --crowdsec-registration-token ${REGISTRATION_TOKEN} \
   --log-level debug
 ```
 
-### Method 2: Manual Machine Account
+### Method 2: Existing Machine Account
 
 ```bash
 ./crowdsec-exporter \
@@ -43,17 +46,18 @@ Metrics are exposed at `http://localhost:9090/metrics`.
 
 ## Configuration Options
 
-| Flag                            | Environment Variable                            | Default                 | Description                            |
-| ------------------------------- | ----------------------------------------------- | ----------------------- | -------------------------------------- |
-| `--crowdsec-url`                | `CROWDSEC_EXPORTER_CROWDSEC_URL`                | `http://localhost:8080` | CrowdSec Local API URL                 |
-| `--crowdsec-login`              | `CROWDSEC_EXPORTER_CROWDSEC_LOGIN`              | -                       | Machine login (manual auth)            |
-| `--crowdsec-password`           | `CROWDSEC_EXPORTER_CROWDSEC_PASSWORD`           | -                       | Machine password (manual auth)         |
-| `--crowdsec-registration-token` | `CROWDSEC_EXPORTER_CROWDSEC_REGISTRATION_TOKEN` | -                       | Registration token (auto-registration) |
-| `--crowdsec-machine-name`       | `CROWDSEC_EXPORTER_CROWDSEC_MACHINE_NAME`       | hostname                | Machine name used during registration  |
-| `--listen-address`              | `CROWDSEC_EXPORTER_SERVER_LISTEN_ADDRESS`       | `:9090`                 | Listen address                         |
-| `--metrics-path`                | `CROWDSEC_EXPORTER_SERVER_METRICS_PATH`         | `/metrics`              | Metrics endpoint                       |
-| `--instance-name`               | `CROWDSEC_EXPORTER_EXPORTER_INSTANCE_NAME`      | `crowdsec`              | Instance label                         |
-| `--log-level`                   | `CROWDSEC_EXPORTER_LOG_LEVEL`                   | `info`                  | Log level (debug, info, warn, error)   |
+| Flag                            | Environment Variable                            | Default                 | Description                                 |
+| ------------------------------- | ----------------------------------------------- | ----------------------- | ------------------------------------------- |
+| `--crowdsec-url`                | `CROWDSEC_EXPORTER_CROWDSEC_URL`                | `http://localhost:8080` | CrowdSec Local API URL                      |
+| `--crowdsec-login`              | `CROWDSEC_EXPORTER_CROWDSEC_LOGIN`              | -                       | Machine login (required)                    |
+| `--crowdsec-password`           | `CROWDSEC_EXPORTER_CROWDSEC_PASSWORD`           | -                       | Machine password (required)                 |
+| `--crowdsec-registration-token` | `CROWDSEC_EXPORTER_CROWDSEC_REGISTRATION_TOKEN` | -                       | Registration token (optional, for auto-reg) |
+| `--crowdsec-machine-name`       | `CROWDSEC_EXPORTER_CROWDSEC_MACHINE_NAME`       | hostname                | Machine name used during registration       |
+| `--crowdsec-deregister-on-exit` | `CROWDSEC_EXPORTER_CROWDSEC_DEREGISTER_ON_EXIT` | `false`                 | Deregister machine on exit                  |
+| `--listen-address`              | `CROWDSEC_EXPORTER_SERVER_LISTEN_ADDRESS`       | `:9090`                 | Listen address                              |
+| `--metrics-path`                | `CROWDSEC_EXPORTER_SERVER_METRICS_PATH`         | `/metrics`              | Metrics endpoint                            |
+| `--instance-name`               | `CROWDSEC_EXPORTER_EXPORTER_INSTANCE_NAME`      | `crowdsec`              | Instance label                              |
+| `--log-level`                   | `CROWDSEC_EXPORTER_LOG_LEVEL`                   | `info`                  | Log level (debug, info, warn, error)        |
 
 ## Installation
 

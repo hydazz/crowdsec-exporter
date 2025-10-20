@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hydazz/crowdsec-exporter/internal/config"
+	"github.com/hydazz/crowdsec-exporter/internal/crowdsec"
 	"github.com/hydazz/crowdsec-exporter/internal/exporter"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -26,72 +27,58 @@ var (
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		slog.Error("Command execution failed", "error", err)
+		slog.Error("command failed", "error", err)
 		os.Exit(1)
 	}
 }
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "crowdsec-exporter",
-		Short: "Prometheus exporter for CrowdSec decisions",
-		Long: `A Prometheus exporter that exposes CrowdSec decisions with rich geographical 
-and ASN information as metrics, compatible with Grafana dashboards.`,
-
-		SilenceUsage:  true, // Don't show usage on errors
-		SilenceErrors: true, // We handle errors manually
+		Use:           "crowdsec-exporter",
+		Short:         "Prometheus exporter for CrowdSec decisions",
+		Long:          "A Prometheus exporter that exposes CrowdSec decisions with geographical and ASN info as metrics.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runExporter()
 		},
 	}
 
-	// Setup Viper for automatic env binding
 	viper.SetEnvPrefix("CROWDSEC_EXPORTER")
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 
-	flags := cmd.Flags()
-	flags.String("crowdsec-url", "http://localhost:8080", "CrowdSec Local API URL")
-	flags.String("crowdsec-login", "", "CrowdSec machine login")
-	flags.String("crowdsec-password", "", "CrowdSec machine password")
-	flags.String("crowdsec-registration-token", "", "CrowdSec auto-registration token")
-	flags.String("crowdsec-machine-name", "", "Machine name for auto-registration (defaults to hostname)")
-	flags.String("listen-address", ":9090", "Address to listen on for web interface and metrics")
-	flags.String("metrics-path", "/metrics", "Path under which to expose metrics")
-	flags.String("instance-name", "crowdsec", "Instance name to use in metrics labels")
-	flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	f := cmd.Flags()
+	f.String("crowdsec-url", "http://localhost:8080", "CrowdSec Local API URL")
+	f.String("crowdsec-login", "", "CrowdSec machine login")
+	f.String("crowdsec-password", "", "CrowdSec machine password")
+	f.String("crowdsec-registration-token", "", "CrowdSec auto-registration token")
+	f.String("crowdsec-machine-name", "", "Machine name for auto-registration (defaults to hostname)")
+	f.Bool("crowdsec-deregister-on-exit", false, "Deregister machine on application exit")
+	f.String("listen-address", ":9090", "Address to listen on for web interface and metrics")
+	f.String("metrics-path", "/metrics", "Path under which to expose metrics")
+	f.String("instance-name", "crowdsec", "Instance name to use in metrics labels")
+	f.String("log-level", "info", "Log level (debug, info, warn, error)")
 
-	// Bind flags to viper
-	if err := viper.BindPFlag("crowdsec.url", flags.Lookup("crowdsec-url")); err != nil {
-		panic(fmt.Sprintf("failed to bind crowdsec-url flag: %v", err))
+	binds := map[string]string{
+		"crowdsec.url":                "crowdsec-url",
+		"crowdsec.login":              "crowdsec-login",
+		"crowdsec.password":           "crowdsec-password",
+		"crowdsec.registration_token": "crowdsec-registration-token",
+		"crowdsec.machine_name":       "crowdsec-machine-name",
+		"crowdsec.deregister_on_exit": "crowdsec-deregister-on-exit",
+		"server.listen_address":       "listen-address",
+		"server.metrics_path":         "metrics-path",
+		"exporter.instance_name":      "instance-name",
+		"log_level":                   "log-level",
 	}
-	if err := viper.BindPFlag("crowdsec.login", flags.Lookup("crowdsec-login")); err != nil {
-		panic(fmt.Sprintf("failed to bind crowdsec-login flag: %v", err))
-	}
-	if err := viper.BindPFlag("crowdsec.password", flags.Lookup("crowdsec-password")); err != nil {
-		panic(fmt.Sprintf("failed to bind crowdsec-password flag: %v", err))
-	}
-	if err := viper.BindPFlag("crowdsec.registration_token", flags.Lookup("crowdsec-registration-token")); err != nil {
-		panic(fmt.Sprintf("failed to bind crowdsec-registration-token flag: %v", err))
-	}
-	if err := viper.BindPFlag("crowdsec.machine_name", flags.Lookup("crowdsec-machine-name")); err != nil {
-		panic(fmt.Sprintf("failed to bind crowdsec-machine-name flag: %v", err))
-	}
-	if err := viper.BindPFlag("server.listen_address", flags.Lookup("listen-address")); err != nil {
-		panic(fmt.Sprintf("failed to bind listen-address flag: %v", err))
-	}
-	if err := viper.BindPFlag("server.metrics_path", flags.Lookup("metrics-path")); err != nil {
-		panic(fmt.Sprintf("failed to bind metrics-path flag: %v", err))
-	}
-	if err := viper.BindPFlag("exporter.instance_name", flags.Lookup("instance-name")); err != nil {
-		panic(fmt.Sprintf("failed to bind instance-name flag: %v", err))
-	}
-	if err := viper.BindPFlag("log_level", flags.Lookup("log-level")); err != nil {
-		panic(fmt.Sprintf("failed to bind log-level flag: %v", err))
+	for key, flag := range binds {
+		if err := viper.BindPFlag(key, f.Lookup(flag)); err != nil {
+			panic(fmt.Sprintf("bind flag %q: %v", flag, err))
+		}
 	}
 
 	cmd.AddCommand(newVersionCmd())
-
 	return cmd
 }
 
@@ -99,7 +86,7 @@ func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show version information",
-		Run: func(cmd *cobra.Command, args []string) {
+		Run: func(*cobra.Command, []string) {
 			fmt.Printf("crowdsec-exporter %s\n", version)
 			fmt.Printf("commit: %s\n", commit)
 			fmt.Printf("built: %s\n", date)
@@ -108,41 +95,26 @@ func newVersionCmd() *cobra.Command {
 }
 
 func runExporter() error {
-	// Load config from flags and env vars
 	cfg := &config.Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
-		return fmt.Errorf("unable to decode config: %w", err)
+		return fmt.Errorf("decode config: %w", err)
 	}
-
-	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("configuration validation failed: %w", err)
+		return fmt.Errorf("config validation: %w", err)
 	}
 
-	// Set up structured logging with slog
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: cfg.GetLogLevel(),
-	}))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.GetLogLevel()}))
 	slog.SetDefault(logger)
 
-	// Create exporter
-	_, err := exporter.New(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to create exporter: %w", err)
+	if _, err := exporter.New(cfg); err != nil {
+		return fmt.Errorf("create exporter: %w", err)
 	}
 
-	// Set up HTTP server
 	mux := http.NewServeMux()
 	mux.Handle(cfg.Server.MetricsPath, promhttp.Handler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<html>
-<head><title>CrowdSec Exporter</title></head>
-<body>
-<h1>CrowdSec Exporter</h1>
-<p><a href="%s">Metrics</a></p>
-</body>
-</html>`, cfg.Server.MetricsPath)
+		fmt.Fprintf(w, indexHTML, cfg.Server.MetricsPath)
 	})
 
 	server := &http.Server{
@@ -150,30 +122,40 @@ func runExporter() error {
 		Handler: mux,
 	}
 
-	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		slog.Info("Starting CrowdSec exporter", "address", cfg.Server.ListenAddress)
-		slog.Info("Metrics available", "path", cfg.Server.MetricsPath)
+		slog.Info("starting exporter", "address", cfg.Server.ListenAddress, "metrics_path", cfg.Server.MetricsPath)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Server failed to start", "error", err)
+			slog.Error("server error", "error", err)
 			os.Exit(1)
 		}
 	}()
 
 	<-stop
-	slog.Info("Shutting down server...")
+	slog.Info("shutdown initiated")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := crowdsec.DeregisterMachine(); err != nil {
+		slog.Warn("deregister failed", "error", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("Server forced to shutdown", "error", err)
+	if err := server.Shutdown(ctx); err != nil {
+		slog.Error("forced shutdown", "error", err)
 		return err
 	}
 
-	slog.Info("Server exited")
+	slog.Info("server exited")
 	return nil
 }
+
+const indexHTML = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>CrowdSec Exporter</title></head>
+<body>
+<h1>CrowdSec Exporter</h1>
+<p><a href="%s">Metrics</a></p>
+</body>
+</html>`

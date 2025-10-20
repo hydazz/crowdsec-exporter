@@ -9,218 +9,172 @@ import (
 )
 
 func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
-
 	CheckAuth()
-	req, err := http.NewRequest("GET", fmt.Sprintf("%v/v1/alerts?limit=%v&origin=crowdsec", AuthToken.Config.CrowdSec.URL, limit), nil)
-	if err != nil {
-		return nil, err
+
+	var (
+		res *http.Response
+		err error
+	)
+	url := fmt.Sprintf("%s/v1/alerts?limit=%d&origin=crowdsec", AuthToken.Config.CrowdSec.URL, limit)
+
+	for attempts := retry; attempts >= 0; attempts-- {
+		req, rerr := http.NewRequest("GET", url, nil)
+		if rerr != nil {
+			return nil, rerr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+GetToken())
+
+		res, err = http.DefaultClient.Do(req)
+		if err != nil {
+			if attempts == 0 {
+				return nil, err
+			}
+			continue
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode >= 300 {
+			if attempts == 0 {
+				return nil, fmt.Errorf("%s", res.Status)
+			}
+			continue
+		}
+		break
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+GetToken())
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	} else if res.StatusCode > 300 && retry > 0 {
-		return QueryAlerts(limit, retry-1)
-	} else if retry <= 0 {
-		http_err := fmt.Errorf("%v", res.Status)
-		return nil, http_err
-	}
-	defer res.Body.Close()
-
-	var result = []map[string]interface{}{}
-	err = json.NewDecoder(res.Body).Decode(&result)
-	if err != nil {
+	var raw []map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
 		return nil, err
 	}
 
 	var alerts models.Alerts
-	for _, v := range result {
-		var alert models.Alert
+	for _, v := range raw {
+		var a models.Alert
+		a.Scenario = getString(v, "scenario")
+		a.DateTime = getString(v, "created_at")
 
-		scenario, ok := v["scenario"].(string)
-		if ok {
-			alert.Scenario = scenario
+		if src, ok := v["source"].(map[string]interface{}); ok {
+			a.IPAddress = getString(src, "ip")
+			a.Latitude = getFloat(src, "latitude")
+			a.Longitude = getFloat(src, "longitude")
+			a.Country = getString(src, "cn")
+			if r := getString(src, "range"); r != "" {
+				a.Subnet = r
+				a.IPRange = r
+			}
+			a.AsName = getString(src, "as_name")
+			a.AsNumber = getString(src, "as_number")
 		}
 
-		source := v["source"].(map[string]interface{}) // type assertion
-		ipaddr, ok := source["ip"].(string)
-		if ok {
-			alert.IPAddress = ipaddr
-		}
+		if ds, ok := v["decisions"].([]interface{}); ok {
+			for _, d := range ds {
+				if dm, ok := d.(map[string]interface{}); ok {
+					var dec models.Decision
+					dec.UUID = getString(dm, "uuid")
+					dec.Scenario = getString(dm, "scenario")
+					dec.IPAddress = getString(dm, "value")
+					dec.Type = getString(dm, "type")
+					dec.Duration = getString(dm, "duration")
+					dec.Scope = getString(dm, "scope")
+					dec.Until = getString(dm, "until")
 
-		datetime, ok := v["created_at"].(string)
-		if ok {
-			alert.DateTime = datetime
-		}
+					dec.Country = a.Country
+					dec.AsName = a.AsName
+					dec.AsNumber = a.AsNumber
+					dec.Latitude = a.Latitude
+					dec.Longitude = a.Longitude
+					dec.IPRange = a.IPRange
 
-		latitude, ok := source["latitude"].(float64)
-		if ok {
-			alert.Latitude = latitude
-		}
-
-		longitude, ok := source["longitude"].(float64)
-		if ok {
-			alert.Longitude = longitude
-		}
-
-		countryiso, ok := source["cn"].(string)
-		if ok {
-			alert.Country = countryiso
-		}
-
-		subnet, ok := source["range"].(string)
-		if ok {
-			alert.Subnet = subnet
-			alert.IPRange = subnet
-		}
-
-		asname, ok := source["as_name"].(string)
-		if ok {
-			alert.AsName = asname
-		}
-
-		asnumber, ok := source["as_number"].(string)
-		if ok {
-			alert.AsNumber = asnumber
-		}
-
-		// Process decisions for this alert
-		if decisions_raw, ok := v["decisions"].([]interface{}); ok {
-			for _, dec_raw := range decisions_raw {
-				if dec := dec_raw.(map[string]interface{}); ok {
-					var decision models.Decision
-
-					if uuid, ok := dec["uuid"].(string); ok {
-						decision.UUID = uuid
-					}
-					if scenario, ok := dec["scenario"].(string); ok {
-						decision.Scenario = scenario
-					}
-					if value, ok := dec["value"].(string); ok {
-						decision.IPAddress = value
-					}
-					if dtype, ok := dec["type"].(string); ok {
-						decision.Type = dtype
-					}
-					if duration, ok := dec["duration"].(string); ok {
-						decision.Duration = duration
-					}
-					if scope, ok := dec["scope"].(string); ok {
-						decision.Scope = scope
-					}
-					if until, ok := dec["until"].(string); ok {
-						decision.Until = until
-					}
-
-					// Copy geographic info from alert to decision
-					decision.Country = alert.Country
-					decision.AsName = alert.AsName
-					decision.AsNumber = alert.AsNumber
-					decision.Latitude = alert.Latitude
-					decision.Longitude = alert.Longitude
-					decision.IPRange = alert.IPRange
-
-					alert.Decisions = append(alert.Decisions, decision)
+					a.Decisions = append(a.Decisions, dec)
 				}
 			}
 		}
 
-		alerts = append(alerts, alert)
+		alerts = append(alerts, a)
 	}
 
 	return alerts, nil
-
 }
 
 func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []string, error) {
+	url := fmt.Sprintf("%s/v1/decisions/stream?startup=%v", AuthToken.Config.CrowdSec.URL, startup)
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("%v/v1/decisions/stream?startup=%v", AuthToken.Config.CrowdSec.URL, startup), nil)
-	if err != nil {
+	var (
+		res *http.Response
+		err error
+	)
+	for attempts := retry; attempts >= 0; attempts-- {
+		req, rerr := http.NewRequest("GET", url, nil)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		res, err = http.DefaultClient.Do(req)
+		if err != nil {
+			if attempts == 0 {
+				return nil, nil, err
+			}
+			continue
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode >= 300 {
+			if attempts == 0 {
+				return nil, nil, fmt.Errorf("%s", res.Status)
+			}
+			continue
+		}
+		break
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
 		return nil, nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	// Note: This endpoint might need API key - should be configurable
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, nil, err
-	} else if res.StatusCode > 300 && retry > 0 {
-		return QueryUpdateDecisions(startup, retry-1)
-	} else if retry <= 0 {
-		http_err := fmt.Errorf("%v", res.Status)
-		return nil, nil, http_err
-	}
-	defer res.Body.Close()
-
-	result := make(map[string]interface{})
-	err = json.NewDecoder(res.Body).Decode(&result)
-	if err != nil {
-		return nil, nil, err
+	var newDecisions models.DecisionArray
+	if newRaw, ok := result["new"].([]interface{}); ok {
+		for _, v := range newRaw {
+			if m, ok := v.(map[string]interface{}); ok {
+				var d models.Decision
+				d.UUID = getString(m, "uuid")
+				d.Scenario = getString(m, "scenario")
+				d.IPAddress = getString(m, "value")
+				d.Type = getString(m, "type")
+				d.Duration = getString(m, "duration")
+				d.Scope = getString(m, "scope")
+				d.Until = getString(m, "until")
+				newDecisions = append(newDecisions, d)
+			}
+		}
 	}
 
-	new_decisions_raw := result["new"].([]interface{})
-	var new_decisions models.DecisionArray
-	for _, v := range new_decisions_raw {
-		var decision models.Decision
-
-		v_parsed := v.(map[string]interface{})
-
-		uuid, ok := v_parsed["uuid"].(string)
-		if ok {
-			decision.UUID = uuid
+	var deleted []string
+	if delRaw, ok := result["deleted"].([]interface{}); ok {
+		for _, v := range delRaw {
+			if m, ok := v.(map[string]interface{}); ok {
+				if id := getString(m, "uuid"); id != "" {
+					deleted = append(deleted, id)
+				}
+			}
 		}
-
-		scenario, ok := v_parsed["scenario"].(string)
-		if ok {
-			decision.Scenario = scenario
-		}
-
-		ipaddr, ok := v_parsed["value"].(string)
-		if ok {
-			decision.IPAddress = ipaddr
-		}
-
-		dec_type, ok := v_parsed["type"].(string)
-		if ok {
-			decision.Type = dec_type
-		}
-
-		duration, ok := v_parsed["duration"].(string)
-		if ok {
-			decision.Duration = duration
-		}
-
-		scope, ok := v_parsed["scope"].(string)
-		if ok {
-			decision.Scope = scope
-		}
-
-		until, ok := v_parsed["until"].(string)
-		if ok {
-			decision.Until = until
-		}
-
-		new_decisions = append(new_decisions, decision)
 	}
 
-	deleted_decisions_raw := result["deleted"].([]interface{})
-	var deleted_decisions []string
-	for _, w := range deleted_decisions_raw {
-		var decisionUUID string
+	return newDecisions, deleted, nil
+}
 
-		w_parsed := w.(map[string]interface{})
-
-		uuid, ok := w_parsed["uuid"].(string)
-		if ok {
-			decisionUUID = uuid
-		}
-
-		deleted_decisions = append(deleted_decisions, decisionUUID)
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
 	}
+	return ""
+}
 
-	return new_decisions, deleted_decisions, nil
+func getFloat(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	return 0
 }

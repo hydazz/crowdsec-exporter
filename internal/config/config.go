@@ -21,6 +21,7 @@ type CrowdSecConfig struct {
 	Password          string `mapstructure:"password"`
 	RegistrationToken string `mapstructure:"registration_token"`
 	MachineName       string `mapstructure:"machine_name"`
+	DeregisterOnExit  bool   `mapstructure:"deregister_on_exit"`
 }
 
 // ServerConfig contains HTTP server configuration
@@ -42,17 +43,15 @@ func (c *Config) Validate() error {
 		errors = append(errors, "crowdsec.url is required")
 	}
 
-	// Check if we have either login/password OR registration token
-	hasLoginAuth := c.CrowdSec.Login != "" && c.CrowdSec.Password != ""
-	hasTokenAuth := c.CrowdSec.RegistrationToken != ""
-
-	if !hasLoginAuth && !hasTokenAuth {
-		errors = append(errors, "either (crowdsec.login and crowdsec.password) OR crowdsec.registration_token is required")
+	// Login and Password are now required
+	if c.CrowdSec.Login == "" {
+		errors = append(errors, "crowdsec.login is required")
+	}
+	if c.CrowdSec.Password == "" {
+		errors = append(errors, "crowdsec.password is required")
 	}
 
-	if hasLoginAuth && hasTokenAuth {
-		errors = append(errors, "cannot use both login/password and registration token authentication")
-	}
+	// Registration token is optional for auto-registration
 
 	if c.Server.ListenAddress == "" {
 		c.Server.ListenAddress = ":9999"

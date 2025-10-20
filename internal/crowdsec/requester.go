@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/hydazz/crowdsec-exporter/internal/models"
 )
@@ -85,7 +86,7 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 					dec.Scenario = getString(dm, "scenario")
 					dec.IPAddress = getString(dm, "value")
 					dec.Type = getString(dm, "type")
-					dec.Duration = getString(dm, "duration")
+					dec.Duration = calculateOriginalDuration(dec.CreatedAt, dec.Until)
 					dec.Scope = getString(dm, "scope")
 					dec.Until = getString(dm, "until")
 					dec.CreatedAt = getString(dm, "created_at")
@@ -108,83 +109,6 @@ func QueryAlerts(limit int64, retry int) (models.Alerts, error) {
 	return alerts, nil
 }
 
-func QueryUpdateDecisions(startup bool, retry int) (models.DecisionArray, []string, error) {
-	if err := CheckAuth(); err != nil {
-		return nil, nil, fmt.Errorf("check auth: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/v1/decisions/stream?startup=%v", AuthToken.Config.CrowdSec.URL, startup)
-
-	var (
-		res *http.Response
-		err error
-	)
-	for attempts := retry; attempts >= 0; attempts-- {
-		req, rerr := http.NewRequest("GET", url, nil)
-		if rerr != nil {
-			return nil, nil, rerr
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		res, err = http.DefaultClient.Do(req)
-		if err != nil {
-			if attempts == 0 {
-				return nil, nil, err
-			}
-			continue
-		}
-		if res.StatusCode >= 300 {
-			res.Body.Close()
-			if attempts == 0 {
-				return nil, nil, fmt.Errorf("%s", res.Status)
-			}
-			continue
-		}
-		break
-	}
-
-	if res == nil {
-		return nil, nil, errors.New("no response received from CrowdSec")
-	}
-	defer res.Body.Close()
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-		return nil, nil, err
-	}
-
-	var newDecisions models.DecisionArray
-	if newRaw, ok := result["new"].([]interface{}); ok {
-		for _, v := range newRaw {
-			if m, ok := v.(map[string]interface{}); ok {
-				var d models.Decision
-				d.UUID = getString(m, "uuid")
-				d.Scenario = getString(m, "scenario")
-				d.IPAddress = getString(m, "value")
-				d.Type = getString(m, "type")
-				d.Duration = getString(m, "duration")
-				d.Scope = getString(m, "scope")
-				d.Until = getString(m, "until")
-				d.CreatedAt = getString(m, "created_at")
-				newDecisions = append(newDecisions, d)
-			}
-		}
-	}
-
-	var deleted []string
-	if delRaw, ok := result["deleted"].([]interface{}); ok {
-		for _, v := range delRaw {
-			if m, ok := v.(map[string]interface{}); ok {
-				if id := getString(m, "uuid"); id != "" {
-					deleted = append(deleted, id)
-				}
-			}
-		}
-	}
-
-	return newDecisions, deleted, nil
-}
-
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {
 		return v
@@ -197,4 +121,24 @@ func getFloat(m map[string]interface{}, key string) float64 {
 		return v
 	}
 	return 0
+}
+
+// calculateOriginalDuration calculates the original ban duration from created_at and until timestamps
+func calculateOriginalDuration(createdAt, until string) string {
+	if createdAt == "" || until == "" {
+		return ""
+	}
+
+	createdTime, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return ""
+	}
+
+	untilTime, err := time.Parse(time.RFC3339, until)
+	if err != nil {
+		return ""
+	}
+
+	duration := untilTime.Sub(createdTime)
+	return duration.String()
 }

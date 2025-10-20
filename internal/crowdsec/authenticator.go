@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -46,15 +47,22 @@ func CheckAuth() {
 	AuthToken.mu.Lock()
 	defer AuthToken.mu.Unlock()
 
+	slog.Debug("CheckAuth called", "isRegistered", AuthToken.isRegistered, "hasRegistrationToken", AuthToken.Config.CrowdSec.RegistrationToken != "", "tokenExpired", AuthToken.Expire.Before(time.Now()))
+
 	// If using auto-registration and not yet registered, register first
 	if !AuthToken.isRegistered && AuthToken.Config.CrowdSec.RegistrationToken != "" {
+		slog.Debug("Attempting to register machine")
 		if err := registerMachine(); err != nil {
 			slog.Error("Failed to register machine", "error", err)
 			os.Exit(1)
 		}
+		// After successful registration, we need to authenticate to get a token
+		// Reset the expiry to force authentication
+		AuthToken.Expire = time.Now()
 	}
 
 	if AuthToken.Expire.Before(time.Now()) {
+		slog.Debug("Token expired, authenticating", "machineId", AuthToken.machineLogin)
 		authenticate()
 	}
 }
@@ -71,6 +79,8 @@ func authenticate() {
 
 	credentials.Machine_id = AuthToken.machineLogin
 	credentials.Password = AuthToken.machinePasswd
+
+	slog.Debug("Authenticating with credentials", "machineId", credentials.Machine_id)
 
 	credentials_json, err := json.Marshal(credentials)
 	if err != nil {
@@ -94,7 +104,7 @@ func authenticate() {
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		slog.Error("Authentication failed", "status", res.StatusCode)
+		slog.Error("Authentication failed", "status", res.StatusCode, "machineId", credentials.Machine_id)
 		os.Exit(1)
 	}
 
@@ -145,6 +155,8 @@ func registerMachine() error {
 		RegistrationToken: AuthToken.Config.CrowdSec.RegistrationToken,
 	}
 
+	slog.Debug("Registering machine", "machineId", registerData.MachineId, "url", AuthToken.Config.CrowdSec.URL+"/v1/watchers")
+
 	registerJSON, err := json.Marshal(registerData)
 	if err != nil {
 		return fmt.Errorf("failed to marshal registration data: %w", err)
@@ -163,7 +175,15 @@ func registerMachine() error {
 	}
 	defer res.Body.Close()
 
+	slog.Debug("Registration response", "status", res.StatusCode, "machineId", registerData.MachineId)
+
 	if res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusAccepted {
+		// Log response body for debugging
+		bodyBytes := make([]byte, 0)
+		if res.Body != nil {
+			bodyBytes, _ = io.ReadAll(res.Body)
+		}
+		slog.Error("Registration failed", "status", res.StatusCode, "machineId", registerData.MachineId, "responseBody", string(bodyBytes))
 		return fmt.Errorf("registration failed with status: %d", res.StatusCode)
 	}
 

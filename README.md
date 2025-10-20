@@ -90,3 +90,7 @@ The main metric is `cs_lapi_decision` with labels:
 ## Attribution
 
 This project continues on [lucadomene/crowdsec-LAPIexporter](https://github.com/lucadomene/crowdsec-LAPIexporter).
+
+## TO-DO
+
+Metrics should be streamed in real time, or give up and use vmmetrics 🤷
